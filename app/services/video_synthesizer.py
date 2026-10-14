@@ -45,9 +45,34 @@ def create_background_canvas(width: int, height: int) -> Image.Image:
         draw.line([(0, y), (width, y)], fill=(r, g, b))
     return bg
 
-def fit_image_to_box(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Resize image to fit box with aspect ratio preserved, centered with subtle border."""
-    return ImageOps.fit(img, (target_w, target_h), method=Image.Resampling.LANCZOS)
+def fit_image_contain(
+    img: Image.Image,
+    target_w: int,
+    target_h: int,
+    bg_color: Tuple[int, int, int] = (0, 0, 0)
+) -> Image.Image:
+    """
+    Fits image completely inside (target_w, target_h) preserving original aspect ratio.
+    The longer dimension of the image is scaled to fit target box bounds so that
+    100% of the picture is visible without any cropping:
+    - For portrait photos (height > width): scales based on height to show full height.
+    - For landscape photos (width > height): scales based on width to show full width.
+    Any empty letterbox/pillarbox space is filled with solid black (0, 0, 0).
+    """
+    im_w, im_h = img.size
+    if im_w <= 0 or im_h <= 0:
+        return Image.new("RGB", (target_w, target_h), bg_color)
+
+    scale = min(target_w / im_w, target_h / im_h)
+    new_w = max(1, int(round(im_w * scale)))
+    new_h = max(1, int(round(im_h * scale)))
+
+    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (target_w, target_h), bg_color)
+    offset_x = (target_w - new_w) // 2
+    offset_y = (target_h - new_h) // 2
+    canvas.paste(resized, (offset_x, offset_y))
+    return canvas
 
 def synthesize_video(
     image_paths: List[Path],
@@ -59,7 +84,8 @@ def synthesize_video(
 ) -> float:
     """
     Renders video from images and optional BGM at the specified resolution (default 1080p).
-    Implements Hybrid Resolution Zoom to preserve full original high-definition details during zoom.
+    Implements Bento Grid layout and Aspect-Ratio Contain fitting (zero crop, black padding)
+    with Hybrid Resolution Zoom to preserve full original high-definition details.
     Returns the total video duration in seconds.
     """
     assert len(image_paths) >= 1, "At least 1 image is required"
@@ -68,32 +94,46 @@ def synthesize_video(
 
     canvas_w, canvas_h, maxrate, bufsize = get_resolution_spec(resolution)
     image_count = len(image_paths)
-    rows, cols, cells = compute_grid_layout(image_count, canvas_w, canvas_h)
 
-    # 1. Preload dual-layer images:
-    # Layer A: Base grid canvas (contains thumbnails in cell positions)
-    # Layer B: High-res normalized original images (fitted to full canvas_w x canvas_h)
-    base_canvas = create_background_canvas(canvas_w, canvas_h)
-    hi_res_images: List[Image.Image] = []
+    # 1. Preload images and extract aspect ratios to compute optimal Bento Grid
+    loaded_images: List[Image.Image] = []
+    aspect_ratios: List[float] = []
 
-    for idx, (img_path, cell) in enumerate(zip(image_paths, cells)):
+    for img_path in image_paths:
         try:
             with Image.open(img_path) as im:
                 im = ImageOps.exif_transpose(im)
                 rgb_im = im.convert("RGB")
-
-                # Layer A: Thumbnail in matrix cell
-                thumb = fit_image_to_box(rgb_im, cell.width, cell.height)
-                base_canvas.paste(thumb, (cell.x1, cell.y1))
-
-                # Layer B: High-res image fitted to full canvas
-                hi_res = fit_image_to_box(rgb_im, canvas_w, canvas_h)
-                hi_res_images.append(hi_res)
+                w, h = rgb_im.size
+                aspect_ratios.append(w / max(1, h))
+                loaded_images.append(rgb_im)
         except Exception:
-            fallback_thumb = Image.new("RGB", (cell.width, cell.height), (40, 44, 52))
-            base_canvas.paste(fallback_thumb, (cell.x1, cell.y1))
-            fallback_hires = Image.new("RGB", (canvas_w, canvas_h), (40, 44, 52))
-            hi_res_images.append(fallback_hires)
+            fallback = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+            aspect_ratios.append(16.0 / 9.0)
+            loaded_images.append(fallback)
+
+    # Compute optimal grid layout (dispatches to Bento Grid if mixed aspect ratios exist)
+    rows, cols, cells = compute_grid_layout(
+        image_count, canvas_w, canvas_h, aspect_ratios=aspect_ratios
+    )
+
+    # Preload dual-layer images:
+    # Layer A: Base grid canvas (contains thumbnails in cell positions fitted via contain)
+    # Layer B: High-res normalized original images (fitted to full canvas with black letterbox/pillarbox)
+    base_canvas = create_background_canvas(canvas_w, canvas_h)
+    hi_res_images: List[Image.Image] = []
+
+    for idx in range(image_count):
+        rgb_im = loaded_images[idx]
+        cell = cells[idx]
+
+        # Layer A: Thumbnail in matrix cell (contain, zero cropping, black background)
+        thumb = fit_image_contain(rgb_im, cell.width, cell.height, bg_color=(0, 0, 0))
+        base_canvas.paste(thumb, (cell.x1, cell.y1))
+
+        # Layer B: High-res image fitted to full canvas (contain, empty area filled with black)
+        hi_res = fit_image_contain(rgb_im, canvas_w, canvas_h, bg_color=(0, 0, 0))
+        hi_res_images.append(hi_res)
 
     # Save thumbnail (the full matrix view)
     if thumbnail_path:
@@ -178,8 +218,10 @@ def synthesize_video(
             cell_cy = cell.center_y
             hi_res_img = hi_res_images[idx]
             hi_res_raw = hi_res_img.tobytes()
-
-            target_scale = max(canvas_w / cell.width, canvas_h / cell.height)
+            im_w, im_h = loaded_images[idx].size
+            scale_in_cell = min(cell.width / max(1, im_w), cell.height / max(1, im_h))
+            scale_in_canvas = min(canvas_w / max(1, im_w), canvas_h / max(1, im_h))
+            target_scale = max(1.0, scale_in_canvas / max(1e-6, scale_in_cell))
 
             # --- Zoom In (with smooth crossfade to High-Res original from midway) ---
             for f in range(zoom_in_frames):

@@ -137,6 +137,20 @@ FOTOSTREAM 프로젝트는 대량의 사진(최대 49장)을 매트릭스 레이
   - Git 메타데이터(`.git`), Docker 설정, 환경변수/시크릿 파일 원천 배제.
   - 테스트 스위트(`tests/`), 설계 문서(`notes/`, `GOAL.md`), Windows 바이너리(`bin/`), 런타임 스토리지(`storage/`) 배제로 빌드 컨텍스트 최소화 및 보안 강화.
 
+### [FR-12] 종횡비 보존(Zero-Crop Contain) 및 벤토 그리드(Bento Grid) 레이아웃
+- **FR-12.1 사진 종횡비 100% 보존 (무손실 맞춤)**:
+  - 세로형 사진(Height > Width): 높이를 기준으로 셀 및 캔버스에 맞춤 스케일링하며, 좌우 빈 영역은 순수 검은색(`(0, 0, 0)`) 필라박스(Pillarbox)로 채움.
+  - 가로형 사진(Width > Height): 폭을 기준으로 셀 및 캔버스에 맞춤 스케일링하며, 상하 빈 영역은 순수 검은색(`(0, 0, 0)`) 레터박스(Letterbox)로 채움.
+  - `ImageOps.fit` 등 원본 사진 외곽을 잘라내는 크롭 모드 영구 배제.
+- **FR-12.2 전체 사진 기준 정밀 줌(Zoom) 애니메이션**:
+  - 개별 사진 확대 시 사진의 전체 영역이 모두 보이도록 캔버스 크기 대비 배율(`scale_in_canvas / scale_in_cell`)을 정밀 계산하여 줌 수행.
+  - 썸네일 상태와 전체화면 고해상도 상태의 종횡비 및 여백이 100% 일치하여 크로스페이드 시 가장자리 흔들림 제거.
+- **FR-12.3 벤토 그리드(Bento Grid) 동적 레이아웃 및 블랙 영역 최소화**:
+  - 세로형 사진과 가로형 사진이 혼합된 경우 종횡비 특성을 클러스터링하여 행(Row)별 최적 높이 및 열(Column)별 가중치 폭을 동적으로 산출하는 벤토 그리드 배치 지원.
+  - 검은 빈 영역 면적을 최소화하여 시각적 조화 극대화.
+  - 배치 후 원본 업로드 순서(`cell.index`)를 유지하여 슬라이드 줌 시퀀스가 왜곡되지 않도록 보장.
+  - 단일 비율 또는 균일 사진의 경우 기존 정규 NxM 그리드로 안전하게 자동 폴백(Fallback).
+
 ---
 
 ## 3. 요구사항 추적 매트릭스 (RTM)
@@ -152,3 +166,5 @@ FOTOSTREAM 프로젝트는 대량의 사진(최대 49장)을 매트릭스 레이
 | **REQ-07** | 웹 UI | 해상도 선택 및 밝은 BGM UI | `templates/dashboard.html` | 브라우저 상 해상도/BGM 변경 확인 |
 | **REQ-08** | 컨테이너 배포 | Dockerfile, Volume, Base Prefix, 헬스체크, README | `Dockerfile`, `main.py`, `README.md` | 컨테이너 헬스체크 엔드포인트 및 단위 테스트 100% 통과 |
 | **REQ-09** | 보안 및 빌드 위생 | .gitignore, .dockerignore 최신화 및 .env.example | `.gitignore`, `.dockerignore`, `.env.example` | 패턴 매칭 검증 및 전체 테스트 11개 100% 통과 |
+| **REQ-10** | 종횡비 및 레이아웃 | 세로/가로 긴쪽 기준 Contain, 블랙여백, 벤토그리드 | `services/grid_calculator.py`, `services/video_synthesizer.py` | 벤토 그리드 비중첩/경계 검증 및 종횡비 무손실 맞춤 테스트 (13개 100% 통과) |
+

@@ -162,4 +162,38 @@
 - **호스트 종속성 배제**: `bin/` (Windows FFmpeg 대신 컨테이너 내부 apt 패키지 사용), `.venv/`
 - **런타임 볼륨 배제**: `storage/`, `downloads/` (호스트 마운트로 런타임에 주입)
 
+---
+
+## 8. 종횡비 무손실 맞춤 및 동적 벤토 그리드 (Aspect-Ratio Contain & Bento Grid)
+
+### 8.1 무손실 종횡비 맞춤 (`fit_image_contain`)
+- **원칙**: 원본 사진의 어떤 픽셀도 잘라내지 않는(Zero-Crop) 100% 완전 표시.
+- **수학적 계산식**:
+  $$\text{scale} = \min\left(\frac{W_{\text{target}}}{W_{\text{img}}}, \frac{H_{\text{target}}}{H_{\text{img}}}\right)$$
+  $$W_{\text{scaled}} = \text{round}(W_{\text{img}} \times \text{scale}), \quad H_{\text{scaled}} = \text{round}(H_{\text{img}} \times \text{scale})$$
+  $$X_{\text{offset}} = \frac{W_{\text{target}} - W_{\text{scaled}}}{2}, \quad Y_{\text{offset}} = \frac{H_{\text{target}} - H_{\text{scaled}}}{2}$$
+- **여백 처리**:
+  - 세로형 사진 ($H_{\text{img}} > W_{\text{img}}$): $H$ 기준 꽉 채우고 좌우에 검은색(`(0, 0, 0)`) 필라박스(Pillarbox) 적용.
+  - 가로형 사진 ($W_{\text{img}} > H_{\text{img}}$): $W$ 기준 꽉 채우고 상하에 검은색(`(0, 0, 0)`) 레터박스(Letterbox) 적용.
+
+### 8.2 정밀 줌(Zoom) 배율 일치식
+- **문제점**: 셀 썸네일 박스와 캔버스 박스의 비율로 줌하면 내부 레터박스/필라박스 비율이 어긋나 고해상도 전환(Crossfade) 시 경계선이 튀는 현상 발생.
+- **해결 공식**:
+  $$\text{scale\_in\_cell} = \min\left(\frac{W_{\text{cell}}}{W_{\text{img}}}, \frac{H_{\text{cell}}}{H_{\text{img}}}\right)$$
+  $$\text{scale\_in\_canvas} = \min\left(\frac{W_{\text{canvas}}}{W_{\text{img}}}, \frac{H_{\text{canvas}}}{H_{\text{img}}}\right)$$
+  $$\text{target\_scale} = \max\left(1.0, \frac{\text{scale\_in\_canvas}}{\text{scale\_in\_cell}}\right)$$
+- 이 공식에 의해 셀 내부의 유효 이미지 면적과 전체화면 캔버스 유효 이미지 면적이 100% 동일한 비례로 확대되어 완벽한 픽셀 정렬 유지.
+
+### 8.3 동적 벤토 그리드(Bento Grid) 레이아웃 (`compute_bento_layout`)
+- **목적**: 세로 사진과 가로 사진이 혼합될 때 고정 그리드에서 발생하는 대형 블랙 여백을 최소화.
+- **알고리즘**:
+  1. 종횡비($AR = W / H$)에 따라 이미지들을 세로형($AR < 0.95$), 가로형($AR > 1.05$), 정사각형($0.95 \le AR \le 1.05$)으로 분류 및 정렬.
+  2. 최적 행(Row) 수 $R$과 행별 아이템 분할 $\{K_1, \dots, K_R\}$ 결정:
+     $$\text{Cost} = \sum_{r=1}^R \left| \text{RowRatio}_r - \text{CanvasRatio} \right| + \text{Penalty}$$
+  3. 행별 높이 $H_r$를 해당 행 아이템들의 누적 가로세로비 비율에 맞추어 할당.
+  4. 행 내 셀별 가로폭 $W_{r, c}$를 개별 이미지의 종횡비 가중치에 비례하여 동적 분배.
+  5. 분할 계산 완료 후 원본 순서(`index`) 기준으로 재정렬하여 슬라이드 순차성 보존.
+  6. 단일 종횡비인 경우 균일 NxM 그리드로 안전하게 자동 폴백(Fallback).
+
+
 

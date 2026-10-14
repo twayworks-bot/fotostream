@@ -4,6 +4,36 @@
 
 ---
 
+## [2026-10-15 00:11] 세로/가로 사진 무손실 맞춤(Zero-Crop Contain), 블랙 여백 및 동적 벤토 그리드(Bento Grid) 레이아웃
+
+### 1. 개발 내용 요약
+- **무손실 종횡비 보존(Zero-Crop Contain) 및 블랙 여백**:
+  - `ImageOps.fit`(외곽 잘림)을 완전 배제하고 `fit_image_contain` 함수를 전면 적용.
+  - 세로형 사진(Height > Width): 높이를 기준으로 셀 및 캔버스에 맞춤 스케일링하며 좌우 빈 영역은 순수 검은색(`(0, 0, 0)`) 필라박스 처리.
+  - 가로형 사진(Width > Height): 폭을 기준으로 셀 및 캔버스에 맞춤 스케일링하며 상하 빈 영역은 순수 검은색(`(0, 0, 0)`) 레터박스 처리.
+- **정밀 줌(Zoom) 애니메이션 배율 공식**:
+  - 셀 썸네일 내부 이미지 유효 영역과 전체화면 캔버스 내부 이미지 유효 영역의 정확한 축척비인 `scale_in_canvas / scale_in_cell` 공식을 적용.
+  - 저해상도 썸네일 줌에서 고해상도 원본 프레임으로 크로스페이드(Crossfade) 시 경계선 튐이나 크기 왜곡 현상 완전 해소.
+- **동적 벤토 그리드(Bento Grid) 알고리즘 (`compute_bento_layout`)**:
+  - 가로형/세로형 사진이 혼합된 경우 종횡비 클러스터링을 통해 최적 행(Row) 분할 및 열(Column) 가중치 폭을 동적으로 계산하여 블랙 여백 최소화.
+  - 레이아웃 계산 후 원본 업로드 순서(`cell.index`)로 재정렬하여 슬라이드 줌 시퀀스 순서 완벽 유지.
+  - 단일 종횡비인 경우 기존 정규 NxM 그리드로 안전하게 자동 폴백(Fallback).
+- **검증 결과**:
+  - 신규 벤토 그리드 비중첩/경계 테스트 및 무손실 Contain 테스트 2종을 포함하여 전체 13개 테스트 스위트 전원 통과 (`13 passed in 16.40s`).
+
+### 2. 작성 산출물
+- `app/services/grid_calculator.py`: 동적 벤토 그리드 계산기 및 종횡비 분할 로직 구현
+- `app/services/video_synthesizer.py`: 무손실 `fit_image_contain`, 블랙 여백, 정밀 줌 배율 일치 적용
+- `tests/test_grid_calculator.py`: 벤토 그리드 및 종횡비 맞춤 검증 테스트 2종 추가
+- `notes/req_202610150011.md`: 사용자 원본 요구사항 및 분석 기록
+- `notes/plan_202610150011.md`: 벤토 그리드 및 무손실 맞춤 구현 계획서
+- `notes/result_202610150011.md`: 개발 결과 및 검증 상세 보고서
+- `notes/requirement.md`: [FR-12] 누적 요구사항 및 RTM [REQ-10] 반영
+- `notes/SPECIFICATION.md`: Section 8 종횡비 및 벤토 그리드 기술 명세 반영
+- `README.md`: 벤토 그리드 및 이미지 무손실 Contain 합성 기능 반영
+
+---
+
 ## [2026-10-14 22:22] .gitignore 및 .dockerignore 최신화: 개인정보, 캐시, 민감 데이터 보호 강화
 
 ### 1. 개발 내용 요약
