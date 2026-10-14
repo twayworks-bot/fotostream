@@ -1,0 +1,143 @@
+# ==============================================================================
+# FOTOSTREAM - Docker Build Context Ignore Rules (.dockerignore)
+# Minimizes Docker build context size and prevents baking sensitive secrets,
+# local database/storage, host-specific binaries, tests, and caches into image.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Version Control & Repository Metadata (형상관리 메타데이터)
+# ------------------------------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+.gitlab/
+
+# ------------------------------------------------------------------------------
+# 2. Environments, Secrets & Credentials (환경변수, 비밀키, 토큰, 인증서)
+# ------------------------------------------------------------------------------
+.env
+*.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+*.pub
+id_rsa*
+id_ed25519*
+known_hosts
+credentials*.json
+client_secret*.json
+service_account*.json
+secret*
+*.secret
+secrets.json
+*token*
+*.token
+.netrc
+.npmrc
+.pypirc
+.aws/
+.ssh/
+syncgithub*
+
+# ------------------------------------------------------------------------------
+# 3. Virtual Environments & Python Bytecode (가상환경 및 바이트코드)
+# ------------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+wheels/
+
+# ------------------------------------------------------------------------------
+# 4. Host-specific Executables & Binaries (로컬 윈도우 바이너리 배제)
+# (컨테이너 내부에서는 apt-get으로 설치된 Linux용 ffmpeg/ffprobe 사용)
+# ------------------------------------------------------------------------------
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+old/
+OLD/
+
+# ------------------------------------------------------------------------------
+# 5. Persistent Storage & Databases (영구 볼륨 및 미디어 파일)
+# ------------------------------------------------------------------------------
+storage/
+storage/*
+downloads/
+downloads/*
+app/data/
+data/
+*.db
+*.sqlite*
+*.db-journal
+*.db-wal
+*.db-shm
+*.mp4
+*.mp3
+*.wav
+*.mkv
+*.ts
+
+# ------------------------------------------------------------------------------
+# 6. Test Suite & Coverage Reports (단위 테스트 및 커버리지 보고서)
+# ------------------------------------------------------------------------------
+tests/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------------------------------------------
+# 7. Internal Documentation & Notes (내부 설계 및 작업 노트)
+# ------------------------------------------------------------------------------
+notes/
+GOAL.md
+
+# ------------------------------------------------------------------------------
+# 8. Temporary Files, Logs & Shell History (임시 파일, 로그, 히스토리)
+# ------------------------------------------------------------------------------
+*.log
+logs/
+scratch/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+.bash_history
+.zsh_history
+.python_history
+.history/
+
+# ------------------------------------------------------------------------------
+# 9. IDE, Editor & OS System Metadata (에디터 및 OS 메타데이터)
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.gemini/
+docker-compose*.yml
