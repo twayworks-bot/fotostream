@@ -143,11 +143,11 @@ class TaskQueueManager:
                     pass
 
             from app.services.video_synthesizer import get_resolution_spec
-            res_w, res_h, _, _ = get_resolution_spec(job.resolution or "1080p")
+            default_w, default_h, _, _ = get_resolution_spec(job.resolution or "1080p")
 
             # Run CPU-bound synthesis in thread pool to avoid blocking asyncio event loop
             loop = asyncio.get_running_loop()
-            duration = await loop.run_in_executor(
+            synth_res = await loop.run_in_executor(
                 None,
                 synthesize_video,
                 image_files,
@@ -157,6 +157,10 @@ class TaskQueueManager:
                 progress_callback,
                 job.resolution or "1080p"
             )
+
+            duration = float(synth_res)
+            res_w = getattr(synth_res, "width", default_w)
+            res_h = getattr(synth_res, "height", default_h)
 
             file_size = output_mp4_path.stat().st_size if output_mp4_path.exists() else 0
             stream_url = f"{settings.url_prefix}/api/v1/videos/{job_id}/stream"

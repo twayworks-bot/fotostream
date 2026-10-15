@@ -113,3 +113,25 @@ def test_render_image_with_ambient_fill_eradicates_black_void():
     # Pixels should have warm reddish tones from the image itself
     assert left_pixel[0] > 30, f"Expected blurred reddish background, got {left_pixel}"
 
+def test_render_image_with_ambient_fill_100_percent_no_crop():
+    """Verify that exposure_ratio=1.0 scales with 0% cropping, preserving 100% of the image."""
+    from app.services.video_synthesizer import render_image_with_ambient_fill
+    target_w, target_h = 360, 640  # 9:16 vertical slot
+    # 3:4 portrait image (not 9:16, e.g. 150x200)
+    img_3_4 = Image.new("RGB", (150, 200), color=(10, 180, 70))  # Green
+    rendered = render_image_with_ambient_fill(img_3_4, target_w, target_h, exposure_ratio=1.0)
+    assert rendered.size == (target_w, target_h)
+
+    # In 3:4 (w/h=0.75) inside 9:16 (w/h=0.5625):
+    # Width fits completely (360), height is 360 / 0.75 = 480.
+    # Center y has the green image: (360//2, 640//2)
+    center_pixel = rendered.getpixel((target_w // 2, target_h // 2))
+    assert center_pixel == (10, 180, 70), f"Center must be uncropped original green: {center_pixel}"
+
+    # Top margin (y=10) and bottom margin (y=630) must be ambient blur, NOT pure black
+    top_pixel = rendered.getpixel((target_w // 2, 10))
+    bottom_pixel = rendered.getpixel((target_w // 2, target_h - 10))
+    assert top_pixel != (0, 0, 0)
+    assert bottom_pixel != (0, 0, 0)
+
+

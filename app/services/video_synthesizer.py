@@ -28,10 +28,35 @@ RESOLUTION_PROFILES: Dict[str, Dict[str, int | str]] = {
     "1920p": {"width": 3414, "height": 1920, "maxrate": "10000k", "bufsize": "20000k"} # Maximum Ultra-HD
 }
 
-def get_resolution_spec(resolution: str) -> Tuple[int, int, str, str]:
+class SynthesisResult(float):
+    """
+    Subclass of float representing video duration in seconds,
+    while also exposing width, height, and is_vertical attributes of the synthesized video.
+    """
+    width: int
+    height: int
+    is_vertical: bool
+
+    def __new__(cls, duration: float, width: int, height: int, is_vertical: bool = False):
+        instance = super().__new__(cls, duration)
+        instance.width = width
+        instance.height = height
+        instance.is_vertical = is_vertical
+        return instance
+
+    def __iter__(self):
+        yield float(self)
+        yield self.width
+        yield self.height
+
+def get_resolution_spec(resolution: str, is_vertical: bool = False) -> Tuple[int, int, str, str]:
     res_key = resolution.lower().strip() if resolution else "1080p"
     profile = RESOLUTION_PROFILES.get(res_key, RESOLUTION_PROFILES["1080p"])
-    return int(profile["width"]), int(profile["height"]), str(profile["maxrate"]), str(profile["bufsize"])
+    w = int(profile["width"])
+    h = int(profile["height"])
+    if is_vertical:
+        w, h = h, w
+    return w, h, str(profile["maxrate"]), str(profile["bufsize"])
 
 def create_background_canvas(width: int, height: int) -> Image.Image:
     """Create a dark, modern elegant gradient background."""
@@ -151,7 +176,6 @@ def synthesize_video(
     if len(image_paths) > settings.MAX_IMAGES_COUNT:
         image_paths = image_paths[:settings.MAX_IMAGES_COUNT]
 
-    canvas_w, canvas_h, maxrate, bufsize = get_resolution_spec(resolution)
     image_count = len(image_paths)
 
     # 1. Preload images and extract aspect ratios to compute optimal layout
@@ -167,9 +191,16 @@ def synthesize_video(
                 aspect_ratios.append(w / max(1, h))
                 loaded_images.append(rgb_im)
         except Exception:
-            fallback = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+            fallback = Image.new("RGB", (1920, 1080), (0, 0, 0))
             aspect_ratios.append(16.0 / 9.0)
             loaded_images.append(fallback)
+
+    # If all images are portrait (vertical orientation: ar < 0.98), produce 9:16 vertical video
+    is_vertical = len(aspect_ratios) > 0 and all(ar < 0.98 for ar in aspect_ratios)
+    canvas_w, canvas_h, maxrate, bufsize = get_resolution_spec(resolution, is_vertical=is_vertical)
+
+    # In 9:16 vertical mode (all portrait photos), show 100% full image without cropping (exposure_ratio = 1.0)
+    exp_ratio = 1.0 if is_vertical else 0.70
 
     # Compute optimal grid layout
     rows, cols, cells = compute_grid_layout(
@@ -177,8 +208,8 @@ def synthesize_video(
     )
 
     # Preload dual-layer images:
-    # Layer A: Base overview canvas (contains cells fitted with 70% exposure + ambient blur)
-    # Layer B: High-res normalized original images (fitted to full canvas with 70% exposure + ambient blur)
+    # Layer A: Base overview canvas (contains cells fitted with ambient blur)
+    # Layer B: High-res normalized original images (fitted to full canvas with ambient blur)
     base_canvas = create_background_canvas(canvas_w, canvas_h)
     hi_res_images: List[Image.Image] = []
 
@@ -186,12 +217,12 @@ def synthesize_video(
         rgb_im = loaded_images[idx]
         cell = cells[idx]
 
-        # Layer A: Thumbnail in matrix cell (70% exposure zoom-fill + ambient blur background)
-        thumb = render_image_with_ambient_fill(rgb_im, cell.width, cell.height, exposure_ratio=0.70)
+        # Layer A: Thumbnail in matrix cell
+        thumb = render_image_with_ambient_fill(rgb_im, cell.width, cell.height, exposure_ratio=exp_ratio)
         base_canvas.paste(thumb, (cell.x1, cell.y1))
 
-        # Layer B: High-res image fitted to full canvas (70% exposure zoom-fill + ambient blur background)
-        hi_res = render_image_with_ambient_fill(rgb_im, canvas_w, canvas_h, exposure_ratio=0.70)
+        # Layer B: High-res image fitted to full canvas (100% uncropped for vertical mode)
+        hi_res = render_image_with_ambient_fill(rgb_im, canvas_w, canvas_h, exposure_ratio=exp_ratio)
         hi_res_images.append(hi_res)
 
     # Save thumbnail (the full matrix view)
@@ -369,7 +400,7 @@ def synthesize_video(
         if on_progress:
             on_progress(100)
 
-        return total_duration
+        return SynthesisResult(total_duration, canvas_w, canvas_h, is_vertical=is_vertical)
 
     except Exception as e:
         if proc.stdin and not proc.stdin.closed:

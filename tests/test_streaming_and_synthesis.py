@@ -74,6 +74,80 @@ def test_full_synthesis_and_streaming_e2e(client):
     assert range_res.headers["Content-Range"].startswith("bytes 0-1023/")
     assert len(range_res.content) == 1024
 
+def test_pure_9_16_vertical_video_synthesis(client):
+    """Verify that when all photos are 9:16 portrait, video is produced in 1080x1920 vertical format."""
+    # 2 vertical photos (9:16 aspect: 180x320)
+    p1 = ("images", ("vert1.jpg", create_dummy_image((240, 80, 80), size=(180, 320)), "image/jpeg"))
+    p2 = ("images", ("vert2.jpg", create_dummy_image((80, 240, 80), size=(180, 320)), "image/jpeg"))
+
+    res = client.post(
+        f"/{settings.DEFAULT_PREFIX}/api/v1/jobs",
+        files=[p1, p2],
+        data={"title": "Vertical 9:16 Shorts Slideshow"}
+    )
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+
+    max_wait = 30
+    start_t = time.time()
+    video_id = None
+
+    while time.time() - start_t < max_wait:
+        poll_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/jobs/{job_id}")
+        assert poll_res.status_code == 200
+        job_data = poll_res.json()
+        if job_data["status"] == "COMPLETED":
+            video_id = job_data["video_id"]
+            break
+        elif job_data["status"] == "FAILED":
+            pytest.fail(f"Vertical job synthesis failed: {job_data.get('error_message')}")
+        time.sleep(1)
+
+    assert video_id is not None
+    v_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/videos/{video_id}")
+    assert v_res.status_code == 200
+    v_data = v_res.json()
+    # Verified: exactly 1080x1920 vertical 9:16 resolution!
+    assert v_data["resolution"] == "1080x1920"
+    assert v_data["file_size"] > 0
+
+def test_non_9_16_portrait_photos_synthesizes_vertical_no_crop(client):
+    """Verify that non-9:16 portrait photos (e.g. 3:4 or 4:5) also produce 9:16 vertical video without cropping."""
+    # 2 portrait photos (3:4 aspect: 240x320)
+    p1 = ("images", ("portrait_3_4_a.jpg", create_dummy_image((120, 200, 80), size=(240, 320)), "image/jpeg"))
+    p2 = ("images", ("portrait_3_4_b.jpg", create_dummy_image((80, 120, 200), size=(240, 320)), "image/jpeg"))
+
+    res = client.post(
+        f"/{settings.DEFAULT_PREFIX}/api/v1/jobs",
+        files=[p1, p2],
+        data={"title": "3:4 Portrait to 9:16 Vertical Video"}
+    )
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+
+    max_wait = 30
+    start_t = time.time()
+    video_id = None
+
+    while time.time() - start_t < max_wait:
+        poll_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/jobs/{job_id}")
+        assert poll_res.status_code == 200
+        job_data = poll_res.json()
+        if job_data["status"] == "COMPLETED":
+            video_id = job_data["video_id"]
+            break
+        elif job_data["status"] == "FAILED":
+            pytest.fail(f"Job failed: {job_data.get('error_message')}")
+        time.sleep(1)
+
+    assert video_id is not None
+    v_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/videos/{video_id}")
+    assert v_res.status_code == 200
+    v_data = v_res.json()
+    assert v_data["resolution"] == "1080x1920"
+    assert v_data["file_size"] > 0
+
+
 def test_concurrent_streaming_limit(client):
     """Verify that when 10 streaming slots are full, 11th request receives HTTP 429."""
     # Temporarily force active streams to 10
