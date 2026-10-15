@@ -296,7 +296,7 @@ async function loadRecentJobs(prefix) {
           <div class="flex items-center gap-2">
             ${isCompleted && j.stream_url ? `
               <button 
-                onclick="openVideoModal('${prefix}', '${j.video_id}', '${escapeHtml(j.title)}', '${j.stream_url}')"
+                onclick="openVideoModal('${prefix}', '${j.video_id}', '${escapeHtml(j.title)}', '${j.stream_url}', '${j.resolution || ''}')"
                 class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
               >
                 <span>▶</span> 스트리밍 재생
@@ -355,9 +355,10 @@ async function loadVideos(prefix) {
     }
 
     container.innerHTML = videos.map(v => {
+      const isVert = isVerticalResolution(v.resolution);
       return `
         <div class="glass-panel glass-panel-hover rounded-xl overflow-hidden flex flex-col transition-all duration-200">
-          <div class="relative aspect-video bg-black/60 group cursor-pointer" onclick="openVideoModal('${prefix}', '${v.id}', '${escapeHtml(v.title)}', '${v.stream_url}')">
+          <div class="relative ${isVert ? 'aspect-[9/16] max-h-72 mx-auto w-full' : 'aspect-video'} bg-black/60 group cursor-pointer" onclick="openVideoModal('${prefix}', '${v.id}', '${escapeHtml(v.title)}', '${v.stream_url}', '${v.resolution || ''}')">
             ${v.thumbnail_url ? `
               <img src="${v.thumbnail_url}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
             ` : `
@@ -368,6 +369,11 @@ async function loadVideos(prefix) {
                 ▶
               </div>
             </div>
+            ${isVert ? `
+              <span class="absolute top-2 left-2 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-bold tracking-wider shadow">
+                9:16 Shorts
+              </span>
+            ` : ''}
             <span class="absolute bottom-2 right-2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono">
               ${v.duration_formatted || '00:00'}
             </span>
@@ -377,7 +383,7 @@ async function loadVideos(prefix) {
             <div>
               <h4 class="font-semibold text-slate-100 text-sm truncate" title="${escapeHtml(v.title)}">${escapeHtml(v.title)}</h4>
               <div class="flex items-center gap-2 text-xs text-slate-400 mt-1">
-                <span class="px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[11px]">${v.resolution || '1080p'}</span>
+                <span class="px-1.5 py-0.2 rounded ${isVert ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-indigo-500/20 text-indigo-300'} font-mono text-[11px]">${v.resolution || '1080p'}</span>
                 <span>•</span>
                 <span>${v.file_size_formatted || '0 MB'}</span>
                 <span>•</span>
@@ -421,7 +427,42 @@ async function loadVideos(prefix) {
   }
 }
 
-function openVideoModal(prefix, videoId, title, streamUrl) {
+function isVerticalResolution(resolution) {
+  if (!resolution) return false;
+  const parts = resolution.toLowerCase().split("x");
+  if (parts.length === 2) {
+    const w = parseInt(parts[0], 10);
+    const h = parseInt(parts[1], 10);
+    if (!isNaN(w) && !isNaN(h)) {
+      return w < h;
+    }
+  }
+  return false;
+}
+
+function applyModalAspect(isVertical) {
+  const card = document.getElementById("videoModalCard");
+  const wrapper = document.getElementById("videoPlayerWrapper");
+  if (!card || !wrapper) return;
+
+  if (isVertical) {
+    // 9:16 Vertical Video Preview (Shorts / Reels style)
+    card.classList.remove("max-w-3xl");
+    card.classList.add("max-w-sm"); // ~384px width, perfectly proportioned for mobile vertical video
+    wrapper.style.aspectRatio = "9 / 16";
+    wrapper.style.maxHeight = "78vh";
+    wrapper.style.width = "100%";
+  } else {
+    // 16:9 Widescreen Video Preview
+    card.classList.remove("max-w-sm");
+    card.classList.add("max-w-3xl"); // 768px width
+    wrapper.style.aspectRatio = "16 / 9";
+    wrapper.style.maxHeight = "70vh";
+    wrapper.style.width = "100%";
+  }
+}
+
+function openVideoModal(prefix, videoId, title, streamUrl, resolution) {
   const modal = document.getElementById("videoPlayerModal");
   const modalTitle = document.getElementById("playerModalTitle");
   const videoPlayer = document.getElementById("mainVideoPlayer");
@@ -434,6 +475,16 @@ function openVideoModal(prefix, videoId, title, streamUrl) {
   modalTitle.textContent = title;
   videoPlayer.src = streamUrl;
   urlDisplay.value = fullStreamUrl;
+
+  // Set aspect ratio from resolution metadata immediately
+  applyModalAspect(isVerticalResolution(resolution));
+
+  // Also verify and adjust based on actual stream dimensions when loaded
+  videoPlayer.onloadedmetadata = () => {
+    if (videoPlayer.videoWidth > 0 && videoPlayer.videoHeight > 0) {
+      applyModalAspect(videoPlayer.videoWidth < videoPlayer.videoHeight);
+    }
+  };
 
   modal.classList.remove("hidden");
   videoPlayer.play().catch(e => console.warn("Autoplay blocked:", e));

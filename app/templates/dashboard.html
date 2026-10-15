@@ -262,14 +262,14 @@
 
   <!-- Video Streaming Modal -->
   <div id="videoPlayerModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
-    <div class="glass-panel rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl border border-slate-700">
+    <div id="videoModalCard" class="glass-panel rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl border border-slate-700 transition-all duration-300">
       <div class="p-4 border-b border-slate-800 flex items-center justify-between">
         <h4 id="playerModalTitle" class="font-bold text-slate-100 truncate pr-4">비디오 재생</h4>
         <button onclick="closeVideoModal()" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold">×</button>
       </div>
 
-      <div class="relative aspect-video bg-black flex items-center justify-center">
-        <video id="mainVideoPlayer" controls class="w-full h-full max-h-[70vh]" playsinline></video>
+      <div id="videoPlayerWrapper" class="relative bg-black flex items-center justify-center transition-all duration-300" style="aspect-ratio: 16/9;">
+        <video id="mainVideoPlayer" controls class="w-full h-full max-h-[75vh] object-contain" playsinline></video>
       </div>
 
       <div class="p-4 bg-slate-900/90 space-y-2">
