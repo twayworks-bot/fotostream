@@ -165,3 +165,46 @@ def test_concurrent_streaming_limit(client):
             assert "Maximum concurrent streaming limit" in res.json()["detail"]
     finally:
         stream_registry.current_streams = original_streams
+
+
+def test_hls_streaming_playlist_and_segments(client):
+    """Verify HLS playlist (.m3u8) and segment (.ts) delivery for synthesized videos."""
+    videos_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/videos")
+    assert videos_res.status_code == 200
+    videos = videos_res.json().get("videos", [])
+    assert len(videos) > 0, "No videos available to test HLS"
+
+    vid = videos[0]["id"]
+    hls_url = videos[0].get("hls_url")
+    assert hls_url is not None
+    assert "playlist.m3u8" in hls_url
+
+    # 1. Fetch playlist
+    pl_res = client.get(hls_url)
+    assert pl_res.status_code == 200
+    assert "application/vnd.apple.mpegurl" in pl_res.headers.get("content-type", "")
+    content = pl_res.text
+    assert "#EXTM3U" in content
+    assert "#EXT-X-TARGETDURATION" in content
+
+    # 2. Extract segment filename
+    seg_lines = [line.strip() for line in content.splitlines() if line.strip().endswith(".ts")]
+    assert len(seg_lines) > 0, "Playlist must contain at least one .ts segment"
+    first_seg = seg_lines[0]
+
+    # 3. Fetch first segment
+    seg_url = f"/{settings.DEFAULT_PREFIX}/api/v1/videos/{vid}/hls/{first_seg}"
+    seg_res = client.get(seg_url)
+    assert seg_res.status_code == 200
+    assert "video/MP2T" in seg_res.headers.get("content-type", "")
+    assert len(seg_res.content) > 0
+
+    # 4. Test master redirect
+    red_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/videos/{vid}/hls", follow_redirects=False)
+    assert red_res.status_code in [307, 302, 301]
+    assert "playlist.m3u8" in red_res.headers.get("location", "")
+
+    # 5. Guard against traversal
+    bad_res = client.get(f"/{settings.DEFAULT_PREFIX}/api/v1/videos/{vid}/hls/../secret.ts")
+    assert bad_res.status_code in [400, 404]
+

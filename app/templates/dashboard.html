@@ -6,6 +6,8 @@
   <title>FOTOSTREAM - 멀티 포토 비디오 합성 & 스트리밍 플랫폼</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- HLS.js for HTTP Live Streaming support across modern browsers -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <link rel="stylesheet" href="{{ url_prefix }}/static/css/styles.css">
   <script>
     window.FOTOSTREAM_PREFIX = "{{ prefix }}";
@@ -264,7 +266,12 @@
   <div id="videoPlayerModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
     <div id="videoModalCard" class="glass-panel rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl border border-slate-700 transition-all duration-300">
       <div class="p-4 border-b border-slate-800 flex items-center justify-between">
-        <h4 id="playerModalTitle" class="font-bold text-slate-100 truncate pr-4">비디오 재생</h4>
+        <div class="flex items-center gap-2 truncate pr-4">
+          <h4 id="playerModalTitle" class="font-bold text-slate-100 truncate">비디오 재생</h4>
+          <span id="hlsStreamingBadge" class="hidden text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+            <span>⚡</span> HLS 스트리밍
+          </span>
+        </div>
         <button onclick="closeVideoModal()" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold">×</button>
       </div>
 
@@ -272,11 +279,26 @@
         <video id="mainVideoPlayer" controls class="w-full h-full max-h-[75vh] object-contain" playsinline></video>
       </div>
 
-      <div class="p-4 bg-slate-900/90 space-y-2">
-        <label class="block text-xs text-slate-400 font-medium">스트리밍 전용 엔드포인트 URL (HTTP 206 Range 지원):</label>
-        <div class="flex gap-2">
-          <input type="text" id="streamUrlInput" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-xs text-indigo-300 font-mono select-all focus:outline-none" />
-          <button onclick="copyStreamUrl(document.getElementById('streamUrlInput').value)" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium">복사</button>
+      <div class="p-4 bg-slate-900/90 space-y-3">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs text-emerald-400 font-semibold flex items-center gap-1">
+              <span>⚡</span> HLS 실시간 스트리밍 URL (m3u8):
+            </label>
+            <span class="text-[10px] text-slate-500">초저지연 2초 세그먼트</span>
+          </div>
+          <div class="flex gap-2">
+            <input type="text" id="hlsUrlInput" readonly class="flex-1 bg-slate-950 border border-emerald-900/50 rounded px-3 py-1.5 text-xs text-emerald-300 font-mono select-all focus:outline-none" />
+            <button onclick="copyStreamUrl(document.getElementById('hlsUrlInput').value, 'HLS')" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">복사</button>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 font-medium mb-1">MP4 직접 스트리밍 URL (HTTP 206 Range):</label>
+          <div class="flex gap-2">
+            <input type="text" id="streamUrlInput" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-xs text-indigo-300 font-mono select-all focus:outline-none" />
+            <button onclick="copyStreamUrl(document.getElementById('streamUrlInput').value, 'MP4')" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium">복사</button>
+          </div>
         </div>
       </div>
     </div>

@@ -15,6 +15,7 @@ class VideoResponse(BaseModel):
     duration_formatted: Optional[str] = None
     resolution: str
     stream_url: str
+    hls_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
     view_count: int
     created_at: datetime

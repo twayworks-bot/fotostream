@@ -165,6 +165,18 @@ class TaskQueueManager:
             file_size = output_mp4_path.stat().st_size if output_mp4_path.exists() else 0
             stream_url = f"{settings.url_prefix}/api/v1/videos/{job_id}/stream"
 
+            # Immediately convert synthesized MP4 to HLS for high real-time responsiveness
+            from app.services.hls_manager import generate_hls_stream
+            hls_dir = settings.abs_hls_dir / job_id
+            hls_url = f"{settings.url_prefix}/api/v1/videos/{job_id}/hls/playlist.m3u8"
+            hls_path = None
+            try:
+                playlist_p, _ = generate_hls_stream(output_mp4_path, hls_dir)
+                hls_path = str(playlist_p)
+                logger.info(f"[Worker {worker_id}] Converted Job {job_id} to HLS stream immediately.")
+            except Exception as hls_err:
+                logger.warning(f"[Worker {worker_id}] Immediate HLS generation warning for Job {job_id}: {hls_err}")
+
             # Create video record
             video = Video(
                 id=job_id,
@@ -176,7 +188,9 @@ class TaskQueueManager:
                 duration=duration,
                 resolution=f"{res_w}x{res_h}",
                 thumbnail_path=str(thumb_path) if thumb_path.exists() else None,
-                stream_url=stream_url
+                stream_url=stream_url,
+                hls_url=hls_url,
+                hls_path=hls_path
             )
             db.add(video)
 

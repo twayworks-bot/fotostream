@@ -4,6 +4,88 @@
 
 ---
 
+## [2026-10-15 22:55] HLS 실시간 스트리밍(HTTP Live Streaming) 지원 및 합성 직후 초고속 HLS 즉시 변환
+
+### 1. 개발 내용 요약
+- **현재 스트리밍 지원방식 점검 및 분석**:
+  - 기존 단일 MP4 HTTP 206 Partial Content(Range Request) 방식의 헤더 파싱 지연 및 세그먼트 부재 한계점 파악.
+- **초고속 HLS 즉시 변환 엔진 (`app/services/hls_manager.py`)**:
+  - 비디오 합성 완료 즉시 FFmpeg 스트림 복사(`-c copy -bsf:v h264_mp4toannexb`)를 통해 0.2초 내에 `.m3u8` 플레이리스트와 2초 단위 `.ts` 세그먼트 생성.
+  - 온디맨드 변환(`ensure_video_hls`) 지원으로 기존 영상도 HLS 스트리밍 완벽 지원.
+- **RESTful HLS 스트리밍 엔드포인트 (`app/routers/videos.py`)**:
+  - `GET /videos/{video_id}/hls/playlist.m3u8`: HLS 플레이리스트 서빙 (`application/vnd.apple.mpegurl`, no-cache, CORS 지원).
+  - `GET /videos/{video_id}/hls/{segment_name}`: 2초 TS 세그먼트 서빙 (`video/MP2T`, public cache).
+  - `GET /videos/{video_id}/hls`: 마스터 리다이렉트 지원.
+  - 비디오 삭제 시 물리 HLS 디렉토리(`storage/hls/{video_id}`) 자동 정리 연동.
+- **웹 대시보드 hls.js 연동 및 다단계 재생 파이프라인**:
+  - `dashboard.html`에 `hls.js` 탑재 및 모달 상단 `⚡ HLS 스트리밍` 뱃지 노출.
+  - `app.js`에서 hls.js $\rightarrow$ Safari Native HLS $\rightarrow$ MP4 Range 요청 순의 자동 폴백 구현.
+  - HLS 및 MP4 듀얼 스트리밍 URL 복사 기능 제공.
+- **검증 결과**:
+  - 단위 및 통합 테스트 19개 전원 통과 (`19 passed, 18 warnings in 29.53s`).
+
+### 2. 작성 산출물
+- `app/services/hls_manager.py`: HLS 변환 및 라이프사이클 관리
+- `app/core/config.py`: `abs_hls_dir` 프로퍼티 및 디렉토리 생성
+- `app/models/video.py`: `hls_path`, `hls_url` 컬럼 추가
+- `app/schemas/video.py`: `hls_url` 스키마 추가
+- `app/core/database.py`: HLS 컬럼 자동 마이그레이션
+- `app/services/task_queue.py`: 합성 직후 즉시 HLS 변환 연동
+- `app/routers/videos.py`: HLS 엔드포인트 및 삭제 정리
+- `app/templates/dashboard.html`: hls.js 및 HLS 모달 UI
+- `app/static/js/app.js`: hls.js 플레이어 및 다단계 재생
+- `tests/test_streaming_and_synthesis.py`: HLS E2E 테스트 추가
+- `notes/req_202610152255.md`: HLS 스트리밍 요구사항 및 계획서
+- `notes/result_202610152255.md`: HLS 개발 산출물 및 검증 보고서
+- `notes/history.md`: v1.9.0 개발 이력 갱신
+- `notes/requirement.md`: [FR-18] 누적 요구사항 및 RTM [REQ-16] 반영
+
+---
+
+## [2026-10-15 22:46] 블랙 영역 최소화 면적 최적화, 70% 노출+앰비언트 블러, BGM 자동등록 해제, 올 세로사진 9:16 Shorts 합성 및 적응형 프리뷰
+
+### 1. 개발 내용 요약
+- **다중 토폴로지 면적 최적화 (`optimize_multi_topology_layout`)**:
+  - $N \times M$ 정규 매트릭스 고정 제약을 완화하고, 이미지들의 종횡비 특성을 반영하여 캔버스 유효 채움 면적이 최대화되는 최적 행/열 배치를 탐색.
+- **70% 중심 노출 + 앰비언트 블러(Ambient Blur) 듀얼 레이어 렌더링**:
+  - 16:9 와이드 화면에 세로형 사진(9:16 등)을 배치할 때 발생하던 검은 필라박스(Pillarbox)를 해소.
+  - 배경: 원본 이미지를 셀에 꽉 차게 확대한 뒤 가우시안 블러(`radius=25`) 처리.
+  - 전경: 원본 종횡비 100% 보존 상태로 셀의 70%(`exp_ratio = 0.70`) 크기로 선명하게 노출.
+  - 줌인 애니메이션 시 크롭 없이 전체 이미지를 100% 온전히 감상할 수 있도록 카메라 경로 및 배율 유지.
+- **기본 BGM 자동 등록 비활성화 및 수동 관리 전환**:
+  - 서버 기동 시 5곡의 기본 프리셋 BGM이 자동 등록되던 `seed_default_bgm()` 호출 제거.
+  - `clean_default_presets()` 함수를 통해 불필요한 기본 번들 음원 정리.
+  - 향후 관리자가 필요한 음원만 선별 등록할 수 있도록 순수 수동 관리 체제로 전환.
+- **올 포트레이트(All-Portrait) 9:16 세로형 비디오 자동 제작**:
+  - 업로드된 모든 이미지가 세로 구도(width < height)인 경우, 캔버스를 16:9 가로에서 9:16 세로(예: $1080 \times 1920$)로 자동 전환.
+  - 3:4, 4:5 등 9:16이 아닌 세로 사진도 9:16 세로 캔버스에 최적화하여 합성.
+  - 세로 영상 합성 시 잘림(Crop) 없이 전체 이미지를 100% 줌인(`exp_ratio = 1.0`)하여 노출.
+- **16:9 & 9:16 반응형 비디오 프리뷰 모달 UI**:
+  - 대시보드의 비디오 미리보기 모달이 해상도 메타데이터를 인식하여 세로 영상은 `max-w-sm` 및 `aspect-[9/16]`, 가로 영상은 `max-w-3xl` 및 `aspect-video`로 동적 레이아웃 전환.
+  - 비디오 갤러리 카드에 `9:16 Shorts` 및 `16:9 Widescreen` 뱃지 시각화.
+- **문서화 관리 규칙 적용**:
+  - `notes/history.md`, `notes/req_202610152246.md`, `notes/result_202610152246.md`, `notes/requirement.md` 작성 및 최신화.
+- **검증 결과**:
+  - 단위 및 통합 테스트 18개 전원 통과 (`18 passed, 18 warnings in 27.96s`).
+
+### 2. 작성 산출물
+- `app/services/grid_calculator.py`: 다중 토폴로지 최적화 및 9:16 세로 캔버스 계산
+- `app/services/video_synthesizer.py`: 70% 노출+블러 배경, 세로형 100% 무크롭 줌, `SynthesisResult` 메타데이터
+- `app/services/task_queue.py`: 세로 해상도 DB 저장 연동
+- `app/main.py`: BGM 자동 시딩 중단 및 프리셋 정리 연동
+- `app/services/bgm_manager.py`: BGM 자동 등록 제거 및 `clean_default_presets`
+- `app/templates/dashboard.html`: 반응형 프리뷰 모달 구조화
+- `app/static/js/app.js`: 프리뷰 종횡비 동적 전환 및 9:16 Shorts 뱃지
+- `app/static/js/bgm_selector.js`: 수동 BGM 관리 UI 조정
+- `tests/test_streaming_and_synthesis.py`: 9:16 세로 영상 합성 테스트 2종 추가
+- `tests/test_grid_calculator.py`: 다중 토폴로지 최적화 테스트 추가
+- `notes/req_202610152246.md`: 사용자 원본 요구사항 및 분석 계획서
+- `notes/result_202610152246.md`: 개발 산출물 및 테스트 검증 보고서
+- `notes/requirement.md`: [FR-13]~[FR-17] 누적 요구사항 및 RTM 최신화
+- `notes/history.md`: v1.8.0 개발 이력 갱신
+
+---
+
 ## [2026-10-15 00:11] 세로/가로 사진 무손실 맞춤(Zero-Crop Contain), 블랙 여백 및 동적 벤토 그리드(Bento Grid) 레이아웃
 
 ### 1. 개발 내용 요약

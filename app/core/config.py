@@ -107,6 +107,11 @@ class Settings(BaseSettings):
         p = Path(self.DOWNLOAD_DIR)
         return p if p.is_absolute() else (BASE_DIR / p).resolve()
 
+    @property
+    def abs_hls_dir(self) -> Path:
+        p = Path(self.HLS_DIR)
+        return p if p.is_absolute() else (BASE_DIR / p).resolve()
+
     def ensure_directories(self) -> None:
         """Ensure all required runtime directories exist."""
         for d in [
@@ -115,6 +120,7 @@ class Settings(BaseSettings):
             self.abs_bgm_dir,
             self.abs_transcode_dir,
             self.abs_download_dir,
+            self.abs_hls_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
         if self.DB_PATH:

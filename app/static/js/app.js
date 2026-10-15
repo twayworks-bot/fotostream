@@ -358,7 +358,7 @@ async function loadVideos(prefix) {
       const isVert = isVerticalResolution(v.resolution);
       return `
         <div class="glass-panel glass-panel-hover rounded-xl overflow-hidden flex flex-col transition-all duration-200">
-          <div class="relative ${isVert ? 'aspect-[9/16] max-h-72 mx-auto w-full' : 'aspect-video'} bg-black/60 group cursor-pointer" onclick="openVideoModal('${prefix}', '${v.id}', '${escapeHtml(v.title)}', '${v.stream_url}', '${v.resolution || ''}')">
+          <div class="relative ${isVert ? 'aspect-[9/16] max-h-72 mx-auto w-full' : 'aspect-video'} bg-black/60 group cursor-pointer" onclick="openVideoModal('${prefix}', '${v.id}', '${escapeHtml(v.title)}', '${v.stream_url}', '${v.resolution || ''}', '${v.hls_url || ''}')">
             ${v.thumbnail_url ? `
               <img src="${v.thumbnail_url}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
             ` : `
@@ -462,29 +462,85 @@ function applyModalAspect(isVertical) {
   }
 }
 
-function openVideoModal(prefix, videoId, title, streamUrl, resolution) {
+function openVideoModal(prefix, videoId, title, streamUrl, resolution, hlsUrl) {
   const modal = document.getElementById("videoPlayerModal");
   const modalTitle = document.getElementById("playerModalTitle");
   const videoPlayer = document.getElementById("mainVideoPlayer");
-  const urlDisplay = document.getElementById("streamUrlInput");
+  const streamUrlInput = document.getElementById("streamUrlInput");
+  const hlsUrlInput = document.getElementById("hlsUrlInput");
+  const hlsBadge = document.getElementById("hlsStreamingBadge");
 
   if (!modal || !videoPlayer) return;
 
+  // Cleanup any active HLS instance
+  if (window.currentHls) {
+    try {
+      window.currentHls.destroy();
+    } catch (e) {
+      console.warn("HLS cleanup error:", e);
+    }
+    window.currentHls = null;
+  }
+
+  // Fallback HLS URL if not supplied
+  const effectiveHlsUrl = hlsUrl || `/${prefix}/api/v1/videos/${videoId}/hls/playlist.m3u8`;
   const fullStreamUrl = window.location.origin + streamUrl;
+  const fullHlsUrl = window.location.origin + effectiveHlsUrl;
 
   modalTitle.textContent = title;
-  videoPlayer.src = streamUrl;
-  urlDisplay.value = fullStreamUrl;
+  if (streamUrlInput) streamUrlInput.value = fullStreamUrl;
+  if (hlsUrlInput) hlsUrlInput.value = fullHlsUrl;
 
   // Set aspect ratio from resolution metadata immediately
   applyModalAspect(isVerticalResolution(resolution));
 
-  // Also verify and adjust based on actual stream dimensions when loaded
+  // Verify and adjust based on actual stream dimensions when metadata loads
   videoPlayer.onloadedmetadata = () => {
     if (videoPlayer.videoWidth > 0 && videoPlayer.videoHeight > 0) {
       applyModalAspect(videoPlayer.videoWidth < videoPlayer.videoHeight);
     }
   };
+
+  // Playback strategy: 1) HLS.js, 2) Safari Native HLS, 3) MP4 HTTP 206 Fallback
+  let isHlsActive = false;
+
+  if (window.Hls && window.Hls.isSupported()) {
+    const hls = new window.Hls({
+      enableWorker: true,
+      lowLatencyMode: true,
+      backBufferLength: 60
+    });
+    hls.loadSource(effectiveHlsUrl);
+    hls.attachMedia(videoPlayer);
+    hls.on(window.Hls.Events.ERROR, function(event, data) {
+      if (data.fatal) {
+        console.warn("Fatal HLS error, falling back to MP4 range stream:", data);
+        hls.destroy();
+        window.currentHls = null;
+        videoPlayer.src = streamUrl;
+        if (hlsBadge) hlsBadge.classList.add("hidden");
+        videoPlayer.play().catch(e => console.warn("Fallback play error:", e));
+      }
+    });
+    window.currentHls = hls;
+    isHlsActive = true;
+  } else if (videoPlayer.canPlayType("application/vnd.apple.mpegurl")) {
+    // Safari / iOS native HLS
+    videoPlayer.src = effectiveHlsUrl;
+    isHlsActive = true;
+  } else {
+    // Standard MP4 Range Request fallback
+    videoPlayer.src = streamUrl;
+    isHlsActive = false;
+  }
+
+  if (hlsBadge) {
+    if (isHlsActive) {
+      hlsBadge.classList.remove("hidden");
+    } else {
+      hlsBadge.classList.add("hidden");
+    }
+  }
 
   modal.classList.remove("hidden");
   videoPlayer.play().catch(e => console.warn("Autoplay blocked:", e));
@@ -493,19 +549,33 @@ function openVideoModal(prefix, videoId, title, streamUrl, resolution) {
 function closeVideoModal() {
   const modal = document.getElementById("videoPlayerModal");
   const videoPlayer = document.getElementById("mainVideoPlayer");
+  const hlsBadge = document.getElementById("hlsStreamingBadge");
+
+  if (window.currentHls) {
+    try {
+      window.currentHls.destroy();
+    } catch (e) {
+      console.warn("HLS destroy error:", e);
+    }
+    window.currentHls = null;
+  }
+
   if (videoPlayer) {
     videoPlayer.pause();
-    videoPlayer.src = "";
+    videoPlayer.removeAttribute("src");
+    videoPlayer.load();
   }
+
+  if (hlsBadge) hlsBadge.classList.add("hidden");
   if (modal) modal.classList.add("hidden");
 }
 
-function copyStreamUrl(streamUrl) {
-  const fullUrl = window.location.origin + streamUrl;
+function copyStreamUrl(url, type = "스트리밍") {
+  const fullUrl = url.startsWith("http") ? url : window.location.origin + url;
   navigator.clipboard.writeText(fullUrl).then(() => {
-    alert("스트리밍 엔드포인트 URL이 클립보드에 복사되었습니다:\n" + fullUrl);
+    alert(`[${type}] URL이 클립보드에 복사되었습니다:\n` + fullUrl);
   }).catch(() => {
-    prompt("스트리밍 URL:", fullUrl);
+    prompt(`[${type}] URL:`, fullUrl);
   });
 }
 

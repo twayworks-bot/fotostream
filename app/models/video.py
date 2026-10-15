@@ -17,6 +17,8 @@ class Video(Base):
     resolution = Column(String(20), nullable=False, default="1280x720")
     thumbnail_path = Column(String(500), nullable=True)
     stream_url = Column(String(500), nullable=False)
+    hls_path = Column(String(500), nullable=True)
+    hls_url = Column(String(500), nullable=True)
     view_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
