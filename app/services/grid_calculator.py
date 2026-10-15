@@ -1,7 +1,7 @@
 """
 Grid Calculator Service for FOTOSTREAM.
-Calculates optimal NxM matrix layouts and dynamic Bento Grid layouts
-for 1 to 49 images, minimizing black/empty areas for mixed aspect ratio photos.
+Calculates optimal, area-balanced, black-area-minimizing layouts for 1 to 49 images
+supporting mixed aspect ratios (including 16:9 landscape and 9:16 portrait photos).
 """
 
 from typing import Tuple, List, Dict, Optional
@@ -59,9 +59,7 @@ def calculate_best_grid(image_count: int) -> Tuple[int, int]:
             if capacity >= image_count:
                 waste = capacity - image_count
                 aspect = m / n
-                # Distance from 16:9 widescreen ratio
                 aspect_diff = abs(aspect - (16.0 / 9.0))
-                # Small penalty if M < N because screens are landscape
                 orientation_penalty = 0.5 if m < n else 0.0
                 score = (waste * 2.0) + aspect_diff + orientation_penalty
                 candidates.append((score, waste, n, m))
@@ -69,6 +67,213 @@ def calculate_best_grid(image_count: int) -> Tuple[int, int]:
     candidates.sort(key=lambda item: item[0])
     best = candidates[0]
     return best[2], best[3]  # rows, cols
+
+def _get_integer_partitions(n: int, k: int, min_val: int = 1):
+    """Generate all partitions of integer n into k positive parts."""
+    if k == 1:
+        if n >= min_val:
+            yield [n]
+        return
+    for i in range(min_val, n - k + 2):
+        for rest in _get_integer_partitions(n - i, k - 1, 1):
+            yield [i] + rest
+
+def _evaluate_layout_cost(cells: List[CellBox], aspect_ratios: List[float], target_area: float) -> float:
+    """
+    Calculate composite loss:
+    Wasted/Black area + mild penalty for area imbalance (equal area preservation).
+    """
+    cost = 0.0
+    for c in cells:
+        ar = aspect_ratios[c.index]
+        cell_ar = c.width / max(1, c.height)
+        match_ratio = min(ar / max(0.01, cell_ar), cell_ar / max(0.01, ar))
+        cell_area = c.width * c.height
+        wasted_area = cell_area * (1.0 - match_ratio)
+        area_diff = abs(cell_area - target_area) / max(1.0, target_area)
+        # 85% weight on minimizing black area, 15% on equal area preservation
+        cost += wasted_area + (0.15 * target_area * (area_diff ** 2))
+    return cost
+
+def _solve_row_partition(
+    items: List[Tuple[int, float]],
+    x_offset: int,
+    y_offset: int,
+    usable_w: int,
+    usable_h: int,
+    gap: int,
+    target_area: float,
+    all_aspect_ratios: List[float]
+) -> Tuple[float, int, int, List[CellBox]]:
+    """Solve optimal row-based layout for given items."""
+    k = len(items)
+    if k == 0:
+        return float('inf'), 0, 0, []
+    if k == 1:
+        idx, _ = items[0]
+        cell = CellBox(idx, 0, 0, x_offset, y_offset, x_offset + usable_w, y_offset + usable_h)
+        return _evaluate_layout_cost([cell], all_aspect_ratios, target_area), 1, 1, [cell]
+
+    # Try different row counts R
+    best_cost = float('inf')
+    best_cells: List[CellBox] = []
+    best_r = 1
+    best_max_cols = 1
+
+    max_r = min(k, 6)
+    # Sort items by aspect ratio
+    sorted_items = sorted(items, key=lambda x: x[1])
+
+    for r in range(1, max_r + 1):
+        if r == 1:
+            partitions = [[k]]
+        elif k <= 10:
+            partitions = list(_get_integer_partitions(k, r))
+        else:
+            base = k / r
+            partitions = [p for p in _get_integer_partitions(k, r) if all(abs(cnt - base) <= 2.2 for cnt in p)]
+            if not partitions:
+                b_int = k // r
+                rem = k % r
+                partitions = [[b_int + (1 if i < rem else 0) for i in range(r)]]
+
+        total_h_avail = usable_h - ((r - 1) * gap)
+        if total_h_avail < r * 20:
+            continue
+
+        for p in partitions:
+            # Slice sorted items into rows
+            sliced_rows = []
+            start = 0
+            for cnt in p:
+                sliced_rows.append(sorted_items[start : start + cnt])
+                start += cnt
+
+            # Compute row heights proportional to 1 / sum(aspect_ratios)
+            row_ars = [sum(it[1] for it in r_items) for r_items in sliced_rows]
+            inv_ars = [1.0 / max(0.01, ar) for ar in row_ars]
+            sum_inv = sum(inv_ars)
+
+            raw_h = [int(total_h_avail * (inv / max(0.01, sum_inv))) for inv in inv_ars]
+            diff_h = total_h_avail - sum(raw_h)
+            raw_h[-1] += diff_h
+
+            if any(h_val < 20 for h_val in raw_h):
+                continue
+
+            cur_y = y_offset
+            cand_cells: List[CellBox] = []
+            cand_max_cols = 1
+
+            for r_idx, (r_items, rh) in enumerate(zip(sliced_rows, raw_h)):
+                m = len(r_items)
+                if m > cand_max_cols:
+                    cand_max_cols = m
+                total_w_avail = usable_w - ((m - 1) * gap)
+                ar_sum = sum(it[1] for it in r_items)
+                cur_x = x_offset
+                for c_idx, (orig_idx, ar) in enumerate(r_items):
+                    if c_idx == m - 1:
+                        cw = (x_offset + usable_w) - cur_x
+                    else:
+                        cw = max(1, int(total_w_avail * (ar / max(0.01, ar_sum))))
+                    cand_cells.append(CellBox(orig_idx, r_idx, c_idx, cur_x, cur_y, cur_x + cw, cur_y + rh))
+                    cur_x += cw + gap
+                cur_y += rh + gap
+
+            cost = _evaluate_layout_cost(cand_cells, all_aspect_ratios, target_area)
+            if cost < best_cost:
+                best_cost = cost
+                best_cells = cand_cells
+                best_r = r
+                best_max_cols = cand_max_cols
+
+    return best_cost, best_r, best_max_cols, best_cells
+
+def _solve_col_partition(
+    items: List[Tuple[int, float]],
+    x_offset: int,
+    y_offset: int,
+    usable_w: int,
+    usable_h: int,
+    gap: int,
+    target_area: float,
+    all_aspect_ratios: List[float]
+) -> Tuple[float, int, int, List[CellBox]]:
+    """Solve optimal column-based layout (vertical strips) for given items."""
+    k = len(items)
+    if k <= 1:
+        return float('inf'), 0, 0, []
+
+    best_cost = float('inf')
+    best_cells: List[CellBox] = []
+    best_max_rows = 1
+    best_c = 1
+
+    max_c = min(k, 8)
+    sorted_items = sorted(items, key=lambda x: x[1])
+
+    for c in range(2, max_c + 1):
+        if k <= 10:
+            partitions = list(_get_integer_partitions(k, c))
+        else:
+            base = k / c
+            partitions = [p for p in _get_integer_partitions(k, c) if all(abs(cnt - base) <= 2.2 for cnt in p)]
+            if not partitions:
+                b_int = k // c
+                rem = k % c
+                partitions = [[b_int + (1 if i < rem else 0) for i in range(c)]]
+
+        total_w_avail = usable_w - ((c - 1) * gap)
+        if total_w_avail < c * 20:
+            continue
+
+        for p in partitions:
+            sliced_cols = []
+            start = 0
+            for cnt in p:
+                sliced_cols.append(sorted_items[start : start + cnt])
+                start += cnt
+
+            col_inv_ars = [sum(1.0 / max(0.01, it[1]) for it in c_items) for c_items in sliced_cols]
+            col_widths_raw = [1.0 / max(0.01, inv) for inv in col_inv_ars]
+            sum_w_raw = sum(col_widths_raw)
+
+            raw_w = [int(total_w_avail * (w_val / max(0.01, sum_w_raw))) for w_val in col_widths_raw]
+            diff_w = total_w_avail - sum(raw_w)
+            raw_w[-1] += diff_w
+
+            if any(w_val < 20 for w_val in raw_w):
+                continue
+
+            cur_x = x_offset
+            cand_cells: List[CellBox] = []
+            cand_max_rows = 1
+
+            for c_idx, (c_items, cw) in enumerate(zip(sliced_cols, raw_w)):
+                m = len(c_items)
+                if m > cand_max_rows:
+                    cand_max_rows = m
+                total_h_avail = usable_h - ((m - 1) * gap)
+                inv_sum = sum(1.0 / max(0.01, it[1]) for it in c_items)
+                cur_y = y_offset
+                for r_idx, (orig_idx, ar) in enumerate(c_items):
+                    if r_idx == m - 1:
+                        ch = (y_offset + usable_h) - cur_y
+                    else:
+                        ch = max(1, int(total_h_avail * ((1.0 / max(0.01, ar)) / max(0.01, inv_sum))))
+                    cand_cells.append(CellBox(orig_idx, r_idx, c_idx, cur_x, cur_y, cur_x + cw, cur_y + ch))
+                    cur_y += ch + gap
+                cur_x += cw + gap
+
+            cost = _evaluate_layout_cost(cand_cells, all_aspect_ratios, target_area)
+            if cost < best_cost:
+                best_cost = cost
+                best_cells = cand_cells
+                best_max_rows = cand_max_rows
+                best_c = c
+
+    return best_cost, best_max_rows, best_c, best_cells
 
 def compute_bento_layout(
     image_count: int,
@@ -80,9 +285,9 @@ def compute_bento_layout(
     gap: Optional[int] = None
 ) -> Tuple[int, int, List[CellBox]]:
     """
-    Computes an optimized Bento Grid layout for photos with mixed aspect ratios.
-    Dynamically scales row heights and column widths so that portrait (tall) and
-    landscape (wide) photos fit their allocated slots with minimal black/empty space.
+    Computes an optimized layout for mixed 16:9 and 9:16 aspect ratio photos.
+    Removes uniform NxM restriction to minimize black/empty wasted spaces while
+    allocating approximately equal nominal area to every photo.
     """
     if image_count < 1:
         return 1, 1, []
@@ -102,140 +307,99 @@ def compute_bento_layout(
     else:
         aspect_ratios = [max(0.2, min(5.0, float(ar))) for ar in aspect_ratios[:image_count]]
 
-    # 1 Image fills usable canvas
-    if image_count == 1:
-        cell = CellBox(0, 0, 0, margin_x, margin_y, canvas_width - margin_x, canvas_height - margin_y)
-        return 1, 1, [cell]
-
     usable_w = canvas_width - (2 * margin_x)
     usable_h = canvas_height - (2 * margin_y)
 
-    rows, _ = calculate_best_grid(image_count)
-    R = max(1, min(rows, image_count))
+    if image_count == 1:
+        cell = CellBox(0, 0, 0, margin_x, margin_y, margin_x + usable_w, margin_y + usable_h)
+        return 1, 1, [cell]
 
-    if R == 1:
-        avail_w = max(1, usable_w - ((image_count - 1) * gap))
-        sum_ar = sum(aspect_ratios)
-        cells = []
-        cur_x = margin_x
-        for i, ar in enumerate(aspect_ratios):
-            if i == image_count - 1:
-                cw = (margin_x + usable_w) - cur_x
-            else:
-                cw = max(1, int(avail_w * (ar / max(0.01, sum_ar))))
-            cells.append(CellBox(i, 0, i, cur_x, margin_y, cur_x + cw, margin_y + usable_h))
-            cur_x += cw + gap
-        return 1, image_count, cells
+    target_area = (usable_w * usable_h) / float(image_count)
+    all_items = [(i, aspect_ratios[i]) for i in range(image_count)]
 
-    # Pair each image with original index: (orig_index, aspect_ratio)
-    items = [(i, aspect_ratios[i]) for i in range(image_count)]
-    # Sort from smallest AR (tallest portrait) to largest AR (widest landscape)
-    sorted_items = sorted(items, key=lambda x: x[1])
+    # Candidate 1: Dynamic Row Partitioning
+    cost_row, r_row, c_row, cells_row = _solve_row_partition(
+        all_items, margin_x, margin_y, usable_w, usable_h, gap, target_area, aspect_ratios
+    )
 
-    # Generate candidate partitions of image_count into R non-empty parts
-    def get_partitions(n, k, min_val=1):
-        if k == 1:
-            yield [n]
-            return
-        for i in range(min_val, n - k + 2):
-            for rest in get_partitions(n - i, k - 1, 1):
-                yield [i] + rest
+    # Candidate 2: Dynamic Column Partitioning
+    cost_col, r_col, c_col, cells_col = _solve_col_partition(
+        all_items, margin_x, margin_y, usable_w, usable_h, gap, target_area, aspect_ratios
+    )
 
-    all_partitions = []
-    if image_count <= 12:
-        all_partitions = list(get_partitions(image_count, R))
-    else:
-        # Constrain partition search around balanced counts for performance
-        base_m = image_count / R
-        for p in get_partitions(image_count, R):
-            if all(abs(cnt - base_m) <= 2.5 for cnt in p):
-                all_partitions.append(p)
-        if not all_partitions:
-            base_int = image_count // R
-            rem = image_count % R
-            all_partitions = [[base_int + (1 if r < rem else 0) for r in range(R)]]
+    best_cost = cost_row
+    best_r = r_row
+    best_c = c_row
+    best_cells = cells_row
 
-    best_partition = None
-    best_cost = float('inf')
+    if cost_col < best_cost:
+        best_cost = cost_col
+        best_r = r_col
+        best_c = c_col
+        best_cells = cells_col
 
-    for p in all_partitions:
-        sliced_rows = []
-        start = 0
-        for cnt in p:
-            sliced_rows.append(sorted_items[start : start + cnt])
-            start += cnt
+    # Candidate 3: Clustered Block Split (Guillotine Tree for mixed portrait & landscape)
+    portraits = [it for it in all_items if it[1] < 1.0]
+    landscapes = [it for it in all_items if it[1] >= 1.0]
 
-        # Evaluate wasted area for this partition
-        row_ars = [sum(it[1] for it in r_items) for r_items in sliced_rows]
-        inv_ars = [1.0 / max(0.01, ar) for ar in row_ars]
-        sum_inv = sum(inv_ars)
-        total_h_avail = usable_h - ((R - 1) * gap)
-        row_h_list = [int(total_h_avail * (inv / max(0.01, sum_inv))) for inv in inv_ars]
+    if portraits and landscapes and len(portraits) + len(landscapes) == image_count:
+        ratio_p = len(portraits) / float(image_count)
+        ratio_l = len(landscapes) / float(image_count)
 
-        cost = 0.0
-        for r_items, rh in zip(sliced_rows, row_h_list):
-            m = len(r_items)
-            total_w_avail = usable_w - ((m - 1) * gap)
-            ar_sum = sum(it[1] for it in r_items)
-            for _, ar in r_items:
-                cw = max(1, int(total_w_avail * (ar / max(0.01, ar_sum))))
-                cell_area = cw * max(1, rh)
-                cell_ar = cw / max(1, rh)
-                ratio = min(ar / cell_ar, cell_ar / ar) if cell_ar > 0 and ar > 0 else 0
-                cost += cell_area * (1.0 - ratio)
+        # Split A: Horizontal split (Top block vs Bottom block)
+        avail_h_split = usable_h - gap
+        h_p = max(80, int(avail_h_split * ratio_p))
+        h_l = avail_h_split - h_p
 
-        if cost < best_cost:
-            best_cost = cost
-            best_partition = sliced_rows
+        # Top: Landscapes, Bottom: Portraits
+        _, r_l1, c_l1, cells_l1 = _solve_row_partition(
+            landscapes, margin_x, margin_y, usable_w, h_l, gap, target_area, aspect_ratios
+        )
+        _, r_p1, c_p1, cells_p1 = _solve_row_partition(
+            portraits, margin_x, margin_y + h_l + gap, usable_w, h_p, gap, target_area, aspect_ratios
+        )
+        if cells_l1 and cells_p1:
+            cand_cells = cells_l1 + cells_p1
+            cand_cost = _evaluate_layout_cost(cand_cells, aspect_ratios, target_area)
+            if cand_cost < best_cost:
+                best_cost = cand_cost
+                best_r = r_l1 + r_p1
+                best_c = max(c_l1, c_p1)
+                best_cells = cand_cells
 
-    if not best_partition:
-        return compute_grid_layout(image_count, canvas_width, canvas_height, margin_x, margin_y, gap)
+        # Split B: Vertical split (Left block vs Right block)
+        avail_w_split = usable_w - gap
+        w_p = max(80, int(avail_w_split * ratio_p))
+        w_l = avail_w_split - w_p
 
-    # Compute layout coordinates from best_partition
-    row_ars = [sum(it[1] for it in r_items) for r_items in best_partition]
-    inv_ars = [1.0 / max(0.01, ar) for ar in row_ars]
-    sum_inv = sum(inv_ars)
-    total_h_avail = usable_h - ((R - 1) * gap)
+        # Left: Portraits, Right: Landscapes
+        _, r_p2, c_p2, cells_p2 = _solve_col_partition(
+            portraits, margin_x, margin_y, w_p, usable_h, gap, target_area, aspect_ratios
+        )
+        if not cells_p2:
+            _, r_p2, c_p2, cells_p2 = _solve_row_partition(
+                portraits, margin_x, margin_y, w_p, usable_h, gap, target_area, aspect_ratios
+            )
 
-    min_row_h = int(usable_h / (R * 2.2))
-    max_row_h = int(usable_h * 2.2 / R)
-    raw_h = [max(min_row_h, min(max_row_h, int(total_h_avail * (inv / max(0.01, sum_inv))))) for inv in inv_ars]
-    total_raw_h = sum(raw_h)
-    row_heights = [int(h_val * (total_h_avail / max(1, total_raw_h))) for h_val in raw_h]
-    diff_h = total_h_avail - sum(row_heights)
-    row_heights[-1] += diff_h
+        _, r_l2, c_l2, cells_l2 = _solve_row_partition(
+            landscapes, margin_x + w_p + gap, margin_y, w_l, usable_h, gap, target_area, aspect_ratios
+        )
+        if cells_p2 and cells_l2:
+            cand_cells = cells_p2 + cells_l2
+            cand_cost = _evaluate_layout_cost(cand_cells, aspect_ratios, target_area)
+            if cand_cost < best_cost:
+                best_cost = cand_cost
+                best_r = max(r_p2, r_l2)
+                best_c = c_p2 + c_l2
+                best_cells = cand_cells
 
-    cells: List[CellBox] = []
-    cur_y = margin_y
-    max_cols = 1
+    if not best_cells or len(best_cells) != image_count:
+        # Fallback to standard uniform grid
+        return compute_grid_layout(image_count, canvas_width, canvas_height, margin_x, margin_y, gap, aspect_ratios=None)
 
-    for r_idx, (r_items, rh) in enumerate(zip(best_partition, row_heights)):
-        m = len(r_items)
-        if m > max_cols:
-            max_cols = m
-
-        total_w_avail = usable_w - ((m - 1) * gap)
-        ar_sum = sum(it[1] for it in r_items)
-
-        cur_x = margin_x
-        for c_idx, (orig_idx, ar) in enumerate(r_items):
-            if c_idx == m - 1:
-                cw = (margin_x + usable_w) - cur_x
-            else:
-                cw = max(1, int(total_w_avail * (ar / max(0.01, ar_sum))))
-
-            x1 = cur_x
-            y1 = cur_y
-            x2 = cur_x + cw
-            y2 = cur_y + rh
-            cells.append(CellBox(orig_idx, r_idx, c_idx, x1, y1, x2, y2))
-            cur_x += cw + gap
-
-        cur_y += rh + gap
-
-    # Sort cells so cells[i] directly corresponds to image index i
-    cells.sort(key=lambda c: c.index)
-    return R, max_cols, cells
+    # Sort cells strictly by image index 0..K-1
+    best_cells.sort(key=lambda c: c.index)
+    return max(1, best_r), max(1, best_c), best_cells
 
 def compute_grid_layout(
     image_count: int,
@@ -248,18 +412,13 @@ def compute_grid_layout(
 ) -> Tuple[int, int, List[CellBox]]:
     """
     Calculates cell boxes for each image in canvas.
-    If aspect_ratios contains mixed orientations (portrait & landscape),
-    dispatches to compute_bento_layout to minimize empty black borders.
+    If aspect_ratios is provided, optimizes non-uniform layout to minimize black area.
     Otherwise computes uniform NxM grid layout.
     """
     if aspect_ratios and len(aspect_ratios) == image_count:
-        min_ar = min(aspect_ratios)
-        max_ar = max(aspect_ratios)
-        # Use Bento Grid if variance in aspect ratio is significant or portrait photos exist
-        if (max_ar / max(0.01, min_ar)) > 1.25 or min_ar < 0.9:
-            return compute_bento_layout(
-                image_count, canvas_width, canvas_height, aspect_ratios, margin_x, margin_y, gap
-            )
+        return compute_bento_layout(
+            image_count, canvas_width, canvas_height, aspect_ratios, margin_x, margin_y, gap
+        )
 
     rows, cols = calculate_best_grid(image_count)
 

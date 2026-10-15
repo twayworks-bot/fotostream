@@ -5,8 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from app.core.config import settings
-from app.core.database import init_db, SessionLocal
-from app.services.bgm_manager import BGMManager
+from app.core.database import init_db
 from app.services.task_queue import task_queue
 from app.routers import system_router, bgm_router, jobs_router, videos_router, ui_router
 
@@ -22,15 +21,6 @@ async def lifespan(app: FastAPI):
     # Startup actions
     logger.info("Initializing FOTOSTREAM Database and Storage...")
     init_db()
-
-    # Seed default BGM presets
-    db = SessionLocal()
-    try:
-        BGMManager.seed_default_presets(db)
-    except Exception as e:
-        logger.warning(f"Could not seed default presets: {e}")
-    finally:
-        db.close()
 
     # Start task worker pool (max N=3)
     task_queue.start_workers()

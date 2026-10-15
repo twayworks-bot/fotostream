@@ -74,3 +74,42 @@ def test_fit_image_contain_portrait_and_landscape():
     assert fitted_landscape.getpixel((200, 0)) == (0, 0, 0)  # Top letterbox is black
     assert fitted_landscape.getpixel((200, target_h - 1)) == (0, 0, 0)  # Bottom letterbox is black
     assert fitted_landscape.getpixel((200, target_h // 2)) == (0, 255, 0)  # Center has image
+
+def test_pure_portrait_layout_optimization():
+    """Verify that pure 9:16 portrait photos are optimized with no overlap and high area utilization."""
+    from app.services.grid_calculator import compute_grid_layout
+    w, h = 1920, 1080
+    # 3 vertical photos (9:16)
+    aspect_ratios_3 = [9.0 / 16.0] * 3
+    rows, cols, cells = compute_grid_layout(3, w, h, aspect_ratios=aspect_ratios_3)
+    assert len(cells) == 3
+    for cell in cells:
+        assert 0 <= cell.x1 < cell.x2 <= w
+        assert 0 <= cell.y1 < cell.y2 <= h
+        # In a 3-photo portrait layout, each cell should be tall (portrait aspect)
+        cell_ar = cell.width / cell.height
+        assert cell_ar < 1.0, f"Expected portrait cell, got AR={cell_ar}"
+
+    # Verify no overlaps
+    for i in range(len(cells)):
+        for j in range(i + 1, len(cells)):
+            c1, c2 = cells[i], cells[j]
+            overlap = not (c1.x2 <= c2.x1 or c2.x2 <= c1.x1 or c1.y2 <= c2.y1 or c2.y2 <= c1.y1)
+            assert not overlap, f"Cells {i} and {j} overlap"
+
+def test_render_image_with_ambient_fill_eradicates_black_void():
+    """Verify that render_image_with_ambient_fill fills side borders with blur instead of pure black."""
+    from app.services.video_synthesizer import render_image_with_ambient_fill
+    target_w, target_h = 400, 225  # 16:9
+    portrait_im = Image.new("RGB", (90, 160), color=(220, 80, 50))  # 9:16 red-orange photo
+    rendered = render_image_with_ambient_fill(portrait_im, target_w, target_h, exposure_ratio=0.70)
+    assert rendered.size == (target_w, target_h)
+
+    # Leftmost and rightmost borders should NOT be pure black (0, 0, 0)
+    left_pixel = rendered.getpixel((5, target_h // 2))
+    right_pixel = rendered.getpixel((target_w - 6, target_h // 2))
+    assert left_pixel != (0, 0, 0), f"Expected ambient blur, got pure black at left border: {left_pixel}"
+    assert right_pixel != (0, 0, 0), f"Expected ambient blur, got pure black at right border: {right_pixel}"
+    # Pixels should have warm reddish tones from the image itself
+    assert left_pixel[0] > 30, f"Expected blurred reddish background, got {left_pixel}"
+

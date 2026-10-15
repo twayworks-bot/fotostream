@@ -4,7 +4,7 @@
 
 let currentAudio = new Audio();
 let currentlyPlayingTrackId = null;
-let selectedBgmId = "preset-sunny-morning"; // Default bright & upbeat selection
+let selectedBgmId = null;
 
 function initBgmSelector(prefix) {
   loadBgmTracks(prefix);
@@ -43,8 +43,13 @@ function renderBgmCards(prefix, tracks) {
   if (!container) return;
 
   if (tracks.length === 0) {
-    container.innerHTML = `<p class="text-slate-400 text-sm">등록된 BGM 음원이 없습니다. 상단의 '+ BGM 등록'을 눌러 음원을 추가하세요.</p>`;
+    selectedBgmId = null;
+    container.innerHTML = `<p class="text-slate-400 text-sm">등록된 BGM 음원이 없습니다. 관리자가 상단의 '+ BGM 등록'을 통해 음원을 추가할 수 있습니다.</p>`;
     return;
+  }
+
+  if (!selectedBgmId || !tracks.some(t => t.id === selectedBgmId)) {
+    selectedBgmId = tracks[0].id;
   }
 
   container.innerHTML = tracks.map((track) => {

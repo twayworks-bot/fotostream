@@ -53,11 +53,7 @@ def fit_image_contain(
 ) -> Image.Image:
     """
     Fits image completely inside (target_w, target_h) preserving original aspect ratio.
-    The longer dimension of the image is scaled to fit target box bounds so that
-    100% of the picture is visible without any cropping:
-    - For portrait photos (height > width): scales based on height to show full height.
-    - For landscape photos (width > height): scales based on width to show full width.
-    Any empty letterbox/pillarbox space is filled with solid black (0, 0, 0).
+    Kept for backward compatibility with pure contain tests.
     """
     im_w, im_h = img.size
     if im_w <= 0 or im_h <= 0:
@@ -74,6 +70,69 @@ def fit_image_contain(
     canvas.paste(resized, (offset_x, offset_y))
     return canvas
 
+def render_image_with_ambient_fill(
+    img: Image.Image,
+    target_w: int,
+    target_h: int,
+    exposure_ratio: float = 0.70,
+    blur_radius: int = 25
+) -> Image.Image:
+    """
+    Renders an image inside (target_w, target_h) with 70% exposure zoom-fill
+    and ambient blurred background to completely eradicate black empty areas
+    while keeping the subject prominently framed and preserving aspect ratio.
+    """
+    im_w, im_h = img.size
+    if im_w <= 0 or im_h <= 0 or target_w <= 0 or target_h <= 0:
+        return Image.new("RGB", (max(1, target_w), max(1, target_h)), (18, 20, 26))
+
+    s_contain = min(target_w / im_w, target_h / im_h)
+    s_cover = max(target_w / im_w, target_h / im_h)
+
+    # If aspect ratio matches target closely within 4%, fit directly
+    if (s_cover / max(1e-6, s_contain)) <= 1.04:
+        return img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+    # 1. Background Layer: Cover target box, blur, and darken with subtle tint
+    bg_w = max(1, int(round(im_w * s_cover)))
+    bg_h = max(1, int(round(im_h * s_cover)))
+    bg_resized = img.resize((bg_w, bg_h), Image.Resampling.BILINEAR)
+
+    # Center-crop background to exact target dimensions
+    bg_x1 = max(0, (bg_w - target_w) // 2)
+    bg_y1 = max(0, (bg_h - target_h) // 2)
+    bg_cropped = bg_resized.crop((bg_x1, bg_y1, bg_x1 + target_w, bg_y1 + target_h))
+
+    eff_blur = max(5, min(blur_radius, min(target_w, target_h) // 4))
+    bg_blurred = bg_cropped.filter(ImageFilter.GaussianBlur(radius=eff_blur))
+
+    # Darken slightly (25% black) for depth and contrast
+    dark_overlay = Image.new("RGB", (target_w, target_h), (12, 14, 18))
+    bg_canvas = Image.blend(bg_blurred, dark_overlay, 0.25)
+
+    # 2. Foreground Layer: 70% exposure zoom (expands width/height to minimize black gaps)
+    s_fg = min(s_contain / max(0.01, exposure_ratio), s_cover)
+    fg_w = max(1, int(round(im_w * s_fg)))
+    fg_h = max(1, int(round(im_h * s_fg)))
+    fg_resized = img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+
+    # If fg exceeds target box in either dimension, center-crop to target
+    if fg_w > target_w or fg_h > target_h:
+        crop_x = max(0, (fg_w - target_w) // 2)
+        crop_y = max(0, (fg_h - target_h) // 2)
+        fg_crop_w = min(fg_w, target_w)
+        fg_crop_h = min(fg_h, target_h)
+        fg_to_paste = fg_resized.crop((crop_x, crop_y, crop_x + fg_crop_w, crop_y + fg_crop_h))
+        offset_x = (target_w - fg_crop_w) // 2
+        offset_y = (target_h - fg_crop_h) // 2
+    else:
+        fg_to_paste = fg_resized
+        offset_x = (target_w - fg_w) // 2
+        offset_y = (target_h - fg_h) // 2
+
+    bg_canvas.paste(fg_to_paste, (offset_x, offset_y))
+    return bg_canvas
+
 def synthesize_video(
     image_paths: List[Path],
     bgm_path: Optional[Path],
@@ -84,8 +143,8 @@ def synthesize_video(
 ) -> float:
     """
     Renders video from images and optional BGM at the specified resolution (default 1080p).
-    Implements Bento Grid layout and Aspect-Ratio Contain fitting (zero crop, black padding)
-    with Hybrid Resolution Zoom to preserve full original high-definition details.
+    Implements Area-Preserving Layout with 70% Exposure Zoom-Fill and Ambient Blur
+    to eliminate all black empty areas while preserving visual fidelity and uncropped focus.
     Returns the total video duration in seconds.
     """
     assert len(image_paths) >= 1, "At least 1 image is required"
@@ -95,7 +154,7 @@ def synthesize_video(
     canvas_w, canvas_h, maxrate, bufsize = get_resolution_spec(resolution)
     image_count = len(image_paths)
 
-    # 1. Preload images and extract aspect ratios to compute optimal Bento Grid
+    # 1. Preload images and extract aspect ratios to compute optimal layout
     loaded_images: List[Image.Image] = []
     aspect_ratios: List[float] = []
 
@@ -112,14 +171,14 @@ def synthesize_video(
             aspect_ratios.append(16.0 / 9.0)
             loaded_images.append(fallback)
 
-    # Compute optimal grid layout (dispatches to Bento Grid if mixed aspect ratios exist)
+    # Compute optimal grid layout
     rows, cols, cells = compute_grid_layout(
         image_count, canvas_w, canvas_h, aspect_ratios=aspect_ratios
     )
 
     # Preload dual-layer images:
-    # Layer A: Base grid canvas (contains thumbnails in cell positions fitted via contain)
-    # Layer B: High-res normalized original images (fitted to full canvas with black letterbox/pillarbox)
+    # Layer A: Base overview canvas (contains cells fitted with 70% exposure + ambient blur)
+    # Layer B: High-res normalized original images (fitted to full canvas with 70% exposure + ambient blur)
     base_canvas = create_background_canvas(canvas_w, canvas_h)
     hi_res_images: List[Image.Image] = []
 
@@ -127,12 +186,12 @@ def synthesize_video(
         rgb_im = loaded_images[idx]
         cell = cells[idx]
 
-        # Layer A: Thumbnail in matrix cell (contain, zero cropping, black background)
-        thumb = fit_image_contain(rgb_im, cell.width, cell.height, bg_color=(0, 0, 0))
+        # Layer A: Thumbnail in matrix cell (70% exposure zoom-fill + ambient blur background)
+        thumb = render_image_with_ambient_fill(rgb_im, cell.width, cell.height, exposure_ratio=0.70)
         base_canvas.paste(thumb, (cell.x1, cell.y1))
 
-        # Layer B: High-res image fitted to full canvas (contain, empty area filled with black)
-        hi_res = fit_image_contain(rgb_im, canvas_w, canvas_h, bg_color=(0, 0, 0))
+        # Layer B: High-res image fitted to full canvas (70% exposure zoom-fill + ambient blur background)
+        hi_res = render_image_with_ambient_fill(rgb_im, canvas_w, canvas_h, exposure_ratio=0.70)
         hi_res_images.append(hi_res)
 
     # Save thumbnail (the full matrix view)
@@ -218,10 +277,7 @@ def synthesize_video(
             cell_cy = cell.center_y
             hi_res_img = hi_res_images[idx]
             hi_res_raw = hi_res_img.tobytes()
-            im_w, im_h = loaded_images[idx].size
-            scale_in_cell = min(cell.width / max(1, im_w), cell.height / max(1, im_h))
-            scale_in_canvas = min(canvas_w / max(1, im_w), canvas_h / max(1, im_h))
-            target_scale = max(1.0, scale_in_canvas / max(1e-6, scale_in_cell))
+            target_scale = max(1.1, min(canvas_w / max(1, cell.width), canvas_h / max(1, cell.height)))
 
             # --- Zoom In (with smooth crossfade to High-Res original from midway) ---
             for f in range(zoom_in_frames):

@@ -43,16 +43,12 @@ def test_root_redirect(client):
     assert res.status_code == 307
     assert res.headers["location"] == settings.url_prefix
 
-def test_bgm_list_and_bright_presets(client):
+def test_bgm_list(client):
     res = client.get(f"{settings.url_prefix}/api/v1/bgm")
     assert res.status_code == 200
     data = res.json()
     assert "tracks" in data
-    assert data["total"] >= 5
-    titles = [t["title"] for t in data["tracks"]]
-    assert "Sunny Morning Walk" in titles
-    assert "Upbeat Joyful Ukulele" in titles
-    assert "Playful Summer Smile" in titles
+    assert isinstance(data["tracks"], list)
 
 def test_delete_bgm_track(client):
     """Test registering a custom BGM track and deleting it."""
